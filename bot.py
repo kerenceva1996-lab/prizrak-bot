@@ -7,6 +7,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.types import WebAppInfo, InlineKeyboardMarkup, InlineKeyboardButton
 from supabase import create_client, Client
 
+# ================== НАСТРОЙКИ ==================
 TOKEN = "8692048583:AAHflIk4eDZZNYFSnjV3-r-lAPCyUnAncHM"
 SUPABASE_URL = "https://upnrccovjyxbmhnupndx.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVwbnJjY292anl4Ym1obnVwbmR4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQwMTA1MTEsImV4cCI6MjA4OTU4NjUxMX0.idfe6tXuc6jD1CuNQzQNHyrIk1v_HfiU_ajkw0XA9Ik"
@@ -17,6 +18,7 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 used_cards = []
 
+# ================== КОМАНДА /start С КНОПКОЙ ==================
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     keyboard = InlineKeyboardMarkup(
@@ -26,6 +28,7 @@ async def cmd_start(message: types.Message):
     )
     await message.answer("🕯️ Нажми кнопку, чтобы сесть за стол.", reply_markup=keyboard)
 
+# ================== КНОПКА "СЕСТЬ ЗА СТОЛ" ==================
 @dp.callback_query(F.data == "to_table")
 async def to_table(callback: types.CallbackQuery):
     url = "https://kerenceva1996-lab.github.io/ghost-table/"
@@ -41,10 +44,13 @@ async def to_table(callback: types.CallbackQuery):
     )
     await callback.answer("✅ Стол открыт!")
 
+# ================== ПОЛУЧЕНИЕ КАРТЫ С САЙТА ==================
 @dp.message(F.content_type == 'web_app_data')
 async def handle_web_app_data(message: types.Message):
     global used_cards
     data = json.loads(message.web_app_data.data)
+    print(f"📨 Получено: {data}")
+
     if data.get('action') == 'get_card':
         all_cards = supabase.table("cards").select("*").execute()
         available = [c for c in all_cards.data if c['id'] not in used_cards]
@@ -53,8 +59,13 @@ async def handle_web_app_data(message: types.Message):
             return
         card = random.choice(available)
         used_cards.append(card['id'])
-        await message.answer(json.dumps({"action": "card_received", "card_id": card['id'], "url": card['image_url']}))
+        await message.answer(json.dumps({
+            "action": "card_received",
+            "card_id": card['id'],
+            "url": card['image_url']
+        }))
 
+# ================== ЗАПУСК ==================
 async def main():
     print("✅ Бот запущен!")
     await bot.delete_webhook(drop_pending_updates=True)
