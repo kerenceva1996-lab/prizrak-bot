@@ -9,7 +9,7 @@ from supabase import create_client, Client
 
 # ================== НАСТРОЙКИ ==================
 TOKEN = "8692048583:AAHflIk4eDZZNYFSnjV3-r-lAPCyUnAncHM"
-SUPABASE_URL = "https://upnrcoviyxbmhnupndx.supabase.co"
+SUPABASE_URL = "https://upnrccovjyxbmhnupndx.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVwbnJjY292anl4Ym1obnVwbmR4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQwMTA1MTEsImV4cCI6MjA4OTU4NjUxMX0.idfe6tXuc6jD1CuNQzQNHyrIk1v_HfiU_ajkw0XA9Ik"
 
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
