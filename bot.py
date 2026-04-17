@@ -6,7 +6,6 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from supabase import create_client, Client
 
-# ================== НАСТРОЙКИ ==================
 TOKEN = "8692048583:AAHflIk4eDZZNYFSnjV3-r-lAPCyUnAncHM"
 SUPABASE_URL = "https://upnrccovjyxbmhnupndx.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVwbnJjY292anl4Ym1obnVwbmR4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQwMTA1MTEsImV4cCI6MjA4OTU4NjUxMX0.idfe6tXuc6jD1CuNQzQNHyrIk1v_HfiU_ajkw0XA9Ik"
@@ -18,9 +17,19 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 used_cards = []
 user_data = {}
 
+# ================== ДОБАВЛЕНИЕ ИГРОКА В БД ==================
+async def ensure_player(user_id, name):
+    """Проверяет, есть ли игрок в БД, и добавляет если нет"""
+    existing = supabase.table("players").select("*").eq("user_id", user_id).execute()
+    if not existing.data:
+        supabase.table("players").insert({"user_id": user_id, "name": name}).execute()
+        print(f"✅ Добавлен игрок: {name} ({user_id})")
+
 # ================== КОМАНДА /start ==================
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
+    await ensure_player(message.from_user.id, message.from_user.first_name)
+    
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="🎴 Взять улику", callback_data="take_card")]
@@ -36,8 +45,8 @@ async def cmd_start(message: types.Message):
 @dp.callback_query(F.data == "take_card")
 async def take_card(callback: types.CallbackQuery):
     user_id = callback.from_user.id
+    await ensure_player(user_id, callback.from_user.first_name)
     
-    # Получаем все карты
     all_cards = supabase.table("cards").select("*").execute()
     available = [c for c in all_cards.data if c['id'] not in used_cards]
     
@@ -45,20 +54,16 @@ async def take_card(callback: types.CallbackQuery):
         await callback.message.answer("❌ Все улики уже использованы! Игра окончена.")
         return
     
-    # Выбираем случайную карту
     card = random.choice(available)
     used_cards.append(card['id'])
     
-    # Сохраняем карту для пользователя
     user_data[user_id] = {'card_id': card['id'], 'card_url': card['image_url']}
     
-    # Отправляем картинку в чат
     await callback.message.answer_photo(
         photo=card['image_url'],
         caption=f"🃏 **Улика получена!**\n\nВыбери категорию:"
     )
     
-    # Кнопки выбора категории
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -107,7 +112,6 @@ async def get_story(message: types.Message):
         "story": story
     }).execute()
     
-    # Публикуем результат в чат
     await message.answer(
         f"📜 **История сохранена!**\n\n"
         f"🃏 Улика: [посмотреть]({card_url})\n"
@@ -116,7 +120,6 @@ async def get_story(message: types.Message):
         f"👻 Следующий игрок, нажми «Взять улику»."
     )
     
-    # Очищаем данные пользователя
     del user_data[user_id]
 
 # ================== ЗАПУСК ==================
