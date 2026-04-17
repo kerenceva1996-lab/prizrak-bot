@@ -1,329 +1,282 @@
-import os
 import asyncio
-from datetime import datetime
+import random
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
+from aiogram.client.default import DefaultBotProperties
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from supabase import create_client, Client
-from dotenv import load_dotenv
 
-load_dotenv()
+# ================== ТВОИ НАСТРОЙКИ ==================
+TOKEN = "8692048583:AAHflIk4eDZZNYFSnjV3-r-lAPCyUnAncHM"
+SUPABASE_URL = "https://upnrccovjyxbmhnupndx.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVwbnJjY292anl4Ym1obnVwbmR4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQwMTA1MTEsImV4cCI6MjA4OTU4NjUxMX0.idfe6tXuc6jD1CuNQzQNHyrIk1v_HfiU_ajkw0XA9Ik"
 
-# ========== КОНФИГ ==========
-TOKEN = os.getenv("BOT_TOKEN")
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
-bot = Bot(token=TOKEN)
+bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher()
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# ========== КАРТЫ ИГРЫ ==========
-CARDS = {
-    'place': ['Заброшенная школа', 'Старый театр', 'Подземелье', 'Библиотека', 'Кладбище'],
-    'method': ['Старое зеркало', 'Свеча желаний', 'Призрачный ключ', 'Маятник', 'Фотография'],
-    'motive': ['Месть', 'Неоконченное дело', 'Защита тайны', 'Предупреждение', 'Любовь']
-}
+# ================== ХРАНИЛИЩЕ ИГР ==================
+games = {}  # game_code -> данные игры
 
-# ВАШИ УЛИКИ С КАРТИНКАМИ (укажите пути к файлам)
-EVIDENCE = {
-    'e1': {'name': '📜 Старое письмо', 'desc': 'Пожелтевшее письмо', 'image': 'images/evidence1.jpg'},
-    'e2': {'name': '🔑 Ржавый ключ', 'desc': 'Старый ржавый ключ', 'image': 'images/evidence2.jpg'},
-    'e3': {'name': '📸 Фотография', 'desc': 'Размытая фигура', 'image': 'images/evidence3.jpg'},
-    'e4': {'name': '💍 Кольцо', 'desc': 'Обручальное кольцо', 'image': 'images/evidence4.jpg'}
-}
-
-# ========== РАБОТА С БАЗОЙ ДАННЫХ ==========
-def create_game(creator_id: int, game_code: str):
-    data = {
-        'game_code': game_code,
-        'creator_id': creator_id,
-        'players': [creator_id],
-        'player_names': {},
+# ================== СОЗДАНИЕ ИГРЫ ==================
+@dp.message(Command("new_game"))
+async def new_game(message: types.Message):
+    game_code = str(message.from_user.id)[:6]
+    games[game_code] = {
+        'creator_id': message.from_user.id,
+        'players': [message.from_user.id],
+        'player_names': {message.from_user.id: message.from_user.first_name},
         'status': 'waiting',
         'current_turn': 0,
-        'used_cards': {'place': [], 'method': [], 'motive': []},
-        'used_evidence': [],
-        'results': {},
-        'pinned_msg_id': None,
-        'chat_id': None
+        'used_cards': [],
+        'board': {'МОТИВ': [], 'МЕСТО': [], 'СПОСОБ': []},
+        'chat_id': message.chat.id,
+        'pinned_msg_id': None
     }
-    supabase.table('games').insert(data).execute()
-    return data
-
-def get_game(game_code: str):
-    result = supabase.table('games').select('*').eq('game_code', game_code).execute()
-    return result.data[0] if result.data else None
-
-def update_game(game_code: str, updates: dict):
-    supabase.table('games').update(updates).eq('game_code', game_code).execute()
-
-# ========== КЛАВИАТУРЫ ==========
-def get_main_keyboard(game_code: str):
-    game = get_game(game_code)
-    if not game:
-        return None
-    
-    # Три главные кнопки
-    keyboard = [
-        [
-            InlineKeyboardButton(text="🏚 МЕСТО", callback_data=f"cat_{game_code}_place"),
-            InlineKeyboardButton(text="🗡 СПОСОБ", callback_data=f"cat_{game_code}_method"),
-            InlineKeyboardButton(text="👻 МОТИВ", callback_data=f"cat_{game_code}_motive")
-        ]
-    ]
-    
-    # Кнопки улик (только неиспользованные)
-    evidence_row = []
-    for ev_id, ev_data in EVIDENCE.items():
-        if ev_id not in game.get('used_evidence', []):
-            evidence_row.append(
-                InlineKeyboardButton(text=ev_data['name'], callback_data=f"ev_{game_code}_{ev_id}")
-            )
-    if evidence_row:
-        keyboard.append(evidence_row)
-    
-    keyboard.append([InlineKeyboardButton(text="✅ ЗАКОНЧИТЬ ХОД", callback_data=f"end_{game_code}")])
-    
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)
-
-def get_card_keyboard(game_code: str, card_type: str):
-    game = get_game(game_code)
-    if not game:
-        return None
-    
-    available = [c for c in CARDS[card_type] if c not in game.get('used_cards', {}).get(card_type, [])]
-    
-    keyboard = []
-    for i in range(0, len(available), 2):
-        row = []
-        for card in available[i:i+2]:
-            row.append(InlineKeyboardButton(text=card, callback_data=f"select_{game_code}_{card_type}_{card}"))
-        keyboard.append(row)
-    
-    keyboard.append([InlineKeyboardButton(text="◀ НАЗАД", callback_data=f"back_{game_code}")])
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)
-
-# ========== ОТПРАВКА ИГРОВОГО ПОЛЯ ==========
-async def send_game_board(game_code: str, chat_id: int, player_id: int = None):
-    """Отправляет игровое поле с картинкой-фоном"""
-    game = get_game(game_code)
-    if not game:
-        return
-    
-    # Определяем, чей ход
-    current_player = game['players'][game['current_turn']]
-    player_name = game.get('player_names', {}).get(str(current_player), f"Игрок {current_player}")
-    
-    caption = (
-        f"👻 **ПИСЬМА ПРИЗРАКА**\n\n"
-        f"🎲 Ход: **{player_name}**\n"
-        f"━━━━━━━━━━━━━━━━━━━\n"
-        f"🏚 **МЕСТО** | 🗡 **СПОСОБ** | 👻 **МОТИВ**\n"
-        f"━━━━━━━━━━━━━━━━━━━\n\n"
-        f"⬇️ **Выберите категорию или улику:**"
-    )
-    
-    # Отправляем картинку-заставку (опционально)
-    try:
-        with open('images/game_bg.jpg', 'rb') as bg:
-            msg = await bot.send_photo(chat_id, bg, caption=caption, parse_mode="Markdown")
-    except:
-        msg = await bot.send_message(chat_id, caption, parse_mode="Markdown")
-    
-    # Отправляем кнопки отдельным сообщением
-    await bot.send_message(chat_id, "🔮 **Ваш выбор:**", reply_markup=get_main_keyboard(game_code))
-    
-    # Закрепляем сообщение с кнопками
-    if game.get('pinned_msg_id'):
-        try:
-            await bot.unpin_chat_message(chat_id, game['pinned_msg_id'])
-        except:
-            pass
-    
-    pinned = await bot.send_message(chat_id, "📌 **Игровое меню (закреплено)**", reply_markup=get_main_keyboard(game_code))
-    await bot.pin_chat_message(chat_id, pinned.message_id)
-    
-    update_game(game_code, {'pinned_msg_id': pinned.message_id, 'chat_id': chat_id})
-
-# ========== ОБРАБОТЧИКИ КОМАНД ==========
-@dp.message(Command("start"))
-async def cmd_start(message: types.Message):
-    await message.answer(
-        "👻 **Добро пожаловать в игру 'Письма призрака'!**\n\n"
-        "🔮 Мистическая детективная игра\n\n"
-        "**Команды:**\n"
-        "/new_game — создать новую игру\n"
-        "/join КОД — присоединиться к игре\n"
-        "/start_game — начать игру (только создатель)"
-    )
-
-@dp.message(Command("new_game"))
-async def cmd_new_game(message: types.Message):
-    game_code = str(message.from_user.id)[:6]
-    create_game(message.from_user.id, game_code)
     
     await message.answer(
         f"🎮 **Игра создана!**\n\n"
         f"📌 Код игры: `{game_code}`\n"
         f"👥 Отправьте код друзьям: `/join {game_code}`\n\n"
-        f"Когда соберётесь (2-6 игроков), введите:\n"
-        f"`/start_game`",
+        f"Когда соберётесь, нажмите `/start_game`",
         parse_mode="Markdown"
     )
 
+# ================== ПРИСОЕДИНЕНИЕ ==================
 @dp.message(Command("join"))
-async def cmd_join(message: types.Message):
+async def join_game(message: types.Message):
     args = message.text.split()
     if len(args) < 2:
         await message.answer("❌ Укажите код: `/join КОД`", parse_mode="Markdown")
         return
     
     game_code = args[1]
-    game = get_game(game_code)
+    game = games.get(game_code)
     
     if not game:
         await message.answer("❌ Игра не найдена!")
-        return
-    
-    if game['status'] != 'waiting':
-        await message.answer("❌ Игра уже началась!")
         return
     
     if message.from_user.id in game['players']:
         await message.answer("❌ Вы уже в игре!")
         return
     
-    if len(game['players']) >= 6:
-        await message.answer("❌ Игра заполнена (максимум 6 игроков)!")
-        return
-    
-    # Добавляем игрока
-    players = game['players']
-    players.append(message.from_user.id)
-    update_game(game_code, {'players': players})
+    game['players'].append(message.from_user.id)
+    game['player_names'][message.from_user.id] = message.from_user.first_name
     
     await message.answer(f"✅ {message.from_user.first_name} присоединился к игре!")
-    
-    # Уведомляем создателя
-    await bot.send_message(
-        game['creator_id'],
-        f"👤 {message.from_user.first_name} присоединился!\n👥 Всего игроков: {len(players)}"
-    )
 
+# ================== СТАРТ ИГРЫ ==================
 @dp.message(Command("start_game"))
-async def cmd_start_game(message: types.Message):
-    # Ищем игру, где пользователь — создатель
+async def start_game(message: types.Message):
+    # Находим игру, где пользователь — создатель
     game_code = None
-    game_data = None
+    game = None
+    for code, g in games.items():
+        if g['creator_id'] == message.from_user.id:
+            game_code = code
+            game = g
+            break
     
-    # В реальном проекте лучше сделать запрос в БД
-    # Сейчас упрощённо: проверяем все активные игры (для демо)
+    if not game:
+        await message.answer("❌ Вы не создали игру! Сначала напишите /new_game")
+        return
     
-    await message.answer("✅ Игра началась! Отправляю игровое поле...")
-    # Здесь нужна логика поиска игры по creator_id
-    # Для простоты пока так:
-    await message.answer("🔧 Функция дорабатывается. Напишите /setup_game {код} для ручной настройки")
+    if len(game['players']) < 2:
+        await message.answer("❌ Нужно минимум 2 игрока! Пригласите друзей через /join")
+        return
+    
+    game['status'] = 'playing'
+    game['current_turn'] = 0
+    
+    await message.answer(f"✅ Игра началась! Всего игроков: {len(game['players'])}")
+    
+    # Отправляем игровой стол
+    await send_game_board(game_code, message.chat.id)
 
-# ========== CALLBACK ОБРАБОТЧИКИ ==========
-@dp.callback_query(F.data.startswith("cat_"))
-async def handle_category(callback: types.CallbackQuery):
-    _, game_code, card_type = callback.data.split("_")
-    await callback.message.edit_reply_markup(reply_markup=get_card_keyboard(game_code, card_type))
+# ================== ОТПРАВКА СТОЛА ==================
+async def send_game_board(game_code: str, chat_id: int):
+    game = games.get(game_code)
+    if not game:
+        return
+    
+    current_player_id = game['players'][game['current_turn']]
+    current_player_name = game['player_names'].get(current_player_id, "Игрок")
+    
+    text = f"🕯️ **СТОЛ УЛИК** 🕯️\n\n"
+    text += f"👻 Ход: **{current_player_name}**\n\n"
+    
+    for category in ['МОТИВ', 'МЕСТО', 'СПОСОБ']:
+        text += f"**{category}**\n"
+        cards = game['board'][category]
+        if cards:
+            for i, card in enumerate(cards):
+                text += f"{i+1}. {card['story']} — {card['player']}\n"
+        else:
+            text += "(пусто)\n"
+        text += "\n"
+    
+    text += "🔍 Нажмите **«Взять улику»** в личном сообщении с ботом!"
+    
+    # Отправляем или обновляем закреплённое сообщение
+    if game.get('pinned_msg_id'):
+        try:
+            await bot.edit_message_text(text, chat_id=chat_id, message_id=game['pinned_msg_id'])
+        except:
+            msg = await bot.send_message(chat_id, text)
+            game['pinned_msg_id'] = msg.message_id
+            await bot.pin_chat_message(chat_id, game['pinned_msg_id'])
+    else:
+        msg = await bot.send_message(chat_id, text)
+        game['pinned_msg_id'] = msg.message_id
+        await bot.pin_chat_message(chat_id, game['pinned_msg_id'])
+
+# ================== СТАРТ В ЛИЧКЕ ==================
+@dp.message(Command("start"))
+async def cmd_start(message: types.Message):
+    # Проверяем, есть ли активная игра у пользователя
+    active_game = None
+    for code, game in games.items():
+        if message.from_user.id in game['players'] and game['status'] == 'playing':
+            active_game = code
+            break
+    
+    if not active_game:
+        await message.answer(
+            "👻 **ПИСЬМА ПРИЗРАКА**\n\n"
+            "Создайте или присоединитесь к игре в группе:\n"
+            "/new_game — создать игру\n"
+            "/join КОД — присоединиться"
+        )
+        return
+    
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🎴 ВЗЯТЬ УЛИКУ", callback_data=f"take_{active_game}")]
+        ]
+    )
+    await message.answer("🃏 Нажми кнопку, чтобы взять улику:", reply_markup=keyboard)
+
+# ================== ВЗЯТЬ УЛИКУ ==================
+@dp.callback_query(F.data.startswith("take_"))
+async def take_card(callback: types.CallbackQuery):
+    game_code = callback.data.split("_")[1]
+    game = games.get(game_code)
+    
+    if not game or game['status'] != 'playing':
+        await callback.answer("❌ Игра не активна", show_alert=True)
+        return
+    
+    # Проверяем, чей ход
+    current_player_id = game['players'][game['current_turn']]
+    if callback.from_user.id != current_player_id:
+        await callback.answer("❌ Сейчас не ваш ход!", show_alert=True)
+        return
+    
+    # Получаем случайную карту из Supabase
+    all_cards = supabase.table("cards").select("*").execute()
+    available = [c for c in all_cards.data if c['id'] not in game['used_cards']]
+    
+    if not available:
+        await callback.message.answer("❌ Все улики использованы!")
+        return
+    
+    card = random.choice(available)
+    game['used_cards'].append(card['id'])
+    
+    # Временное хранилище для выбора игрока
+    game['temp_card'] = {
+        'card_id': card['id'],
+        'card_url': card['image_url'],
+        'player_id': callback.from_user.id
+    }
+    
+    await callback.message.answer_photo(
+        photo=card['image_url'],
+        caption="🃏 **Улика получена!**\n\nВыбери категорию:"
+    )
+    
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🗡️ МОТИВ", callback_data=f"cat_{game_code}_МОТИВ"),
+                InlineKeyboardButton(text="📍 МЕСТО", callback_data=f"cat_{game_code}_МЕСТО"),
+                InlineKeyboardButton(text="⚰️ СПОСОБ", callback_data=f"cat_{game_code}_СПОСОБ")
+            ]
+        ]
+    )
+    await callback.message.answer("Куда положим улику?", reply_markup=keyboard)
     await callback.answer()
 
-@dp.callback_query(F.data.startswith("select_"))
-async def handle_card_select(callback: types.CallbackQuery):
-    _, game_code, card_type, card_value = callback.data.split("_", 3)
+# ================== ВЫБОР КАТЕГОРИИ ==================
+@dp.callback_query(F.data.startswith("cat_"))
+async def select_category(callback: types.CallbackQuery):
+    _, game_code, category = callback.data.split("_")
+    game = games.get(game_code)
     
-    game = get_game(game_code)
-    if not game:
-        await callback.answer("Ошибка игры!", show_alert=True)
+    if not game or 'temp_card' not in game:
+        await callback.message.answer("❌ Сначала возьми улику!")
         return
     
-    # Сохраняем выбор
-    player_id = callback.from_user.id
-    if str(player_id) not in game.get('results', {}):
-        results = game.get('results', {})
-        results[str(player_id)] = {}
-        update_game(game_code, {'results': results})
-        game = get_game(game_code)
-    
-    results = game['results']
-    results[str(player_id)][card_type] = card_value
-    update_game(game_code, {'results': results})
-    
-    # Обновляем использованные карты
-    used = game.get('used_cards', {})
-    used[card_type].append(card_value)
-    update_game(game_code, {'used_cards': used})
-    
-    await callback.answer(f"✅ Выбрано: {card_value}!", show_alert=True)
-    
-    # Возвращаем главное меню
-    await callback.message.edit_reply_markup(reply_markup=get_main_keyboard(game_code))
+    game['temp_card']['category'] = category
+    await callback.message.answer(f"✅ Категория: {category}\n\n✍️ Напиши историю для этой улики:")
+    await callback.answer()
 
-@dp.callback_query(F.data.startswith("ev_"))
-async def handle_evidence(callback: types.CallbackQuery):
-    _, game_code, ev_id = callback.data.split("_")
+# ================== ПОЛУЧЕНИЕ ИСТОРИИ ==================
+@dp.message()
+async def get_story(message: types.Message):
+    # Находим игру, где у игрока есть temp_card
+    game_code = None
+    game = None
+    for code, g in games.items():
+        if g.get('temp_card') and g['temp_card'].get('player_id') == message.from_user.id:
+            game_code = code
+            game = g
+            break
     
-    game = get_game(game_code)
-    if not game:
-        await callback.answer("Ошибка!", show_alert=True)
+    if not game or 'category' not in game['temp_card']:
         return
     
-    # Отправляем КАРТИНКУ улики
-    evidence = EVIDENCE.get(ev_id)
-    if evidence and evidence.get('image'):
-        try:
-            photo = FSInputFile(evidence['image'])
-            await bot.send_photo(
-                callback.from_user.id,
-                photo,
-                caption=f"🔍 **{evidence['name']}**\n\n{evidence['desc']}",
-                parse_mode="Markdown"
-            )
-        except Exception as e:
-            await callback.answer(f"Ошибка загрузки картинки: {e}", show_alert=True)
-    else:
-        await callback.answer(f"🔍 {evidence['name']}: {evidence['desc']}", show_alert=True)
+    story = message.text
+    card_id = game['temp_card']['card_id']
+    category = game['temp_card']['category']
+    card_url = game['temp_card']['card_url']
+    player_name = message.from_user.first_name
     
-    # Отмечаем улику как использованную
-    used = game.get('used_evidence', [])
-    if ev_id not in used:
-        used.append(ev_id)
-        update_game(game_code, {'used_evidence': used})
+    # Сохраняем в базу данных
+    supabase.table("moves").insert({
+        "player_id": message.from_user.id,
+        "card_id": card_id,
+        "category": category,
+        "story": story
+    }).execute()
     
-    await callback.answer("Улика получена!")
-
-@dp.callback_query(F.data.startswith("end_"))
-async def end_turn(callback: types.CallbackQuery):
-    _, game_code = callback.data.split("_")
-    
-    game = get_game(game_code)
-    if not game:
-        await callback.answer("Ошибка!", show_alert=True)
-        return
+    # Добавляем в игровую доску
+    game['board'][category].append({
+        'card_id': card_id,
+        'url': card_url,
+        'story': story,
+        'player': player_name
+    })
     
     # Переход хода
-    current_turn = game['current_turn']
-    next_turn = (current_turn + 1) % len(game['players'])
-    update_game(game_code, {'current_turn': next_turn})
+    game['current_turn'] = (game['current_turn'] + 1) % len(game['players'])
     
-    await callback.answer("✅ Ход завершён!")
+    # Очищаем временные данные
+    del game['temp_card']
     
-    # Обновляем игровое поле
-    await send_game_board(game_code, callback.message.chat.id)
+    # Обновляем закреплённое сообщение
+    await send_game_board(game_code, game['chat_id'])
+    
+    await message.answer(
+        f"📜 **История сохранена!**\n\n"
+        f"👻 Следующий игрок, нажми «Взять улику» в личном сообщении с ботом."
+    )
 
-@dp.callback_query(F.data.startswith("back_"))
-async def back_to_main(callback: types.CallbackQuery):
-    _, game_code = callback.data.split("_")
-    await callback.message.edit_reply_markup(reply_markup=get_main_keyboard(game_code))
-    await callback.answer()
-
-# ========== ЗАПУСК ==========
+# ================== ЗАПУСК ==================
 async def main():
-    print("👻 Бот 'Письма призрака' запущен!")
+    print("✅ Бот Письма Призрака запущен!")
+    await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
