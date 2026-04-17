@@ -17,18 +17,30 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 used_cards = []
 user_data = {}
 
-# ================== ДОБАВЛЕНИЕ ИГРОКА ==================
+# ================== ДОБАВЛЕНИЕ ИГРОКА (СРАЗУ В БД) ==================
 def add_player(user_id, name):
     try:
-        supabase.table("players").insert({"user_id": user_id, "name": name}).execute()
-        print(f"✅ Добавлен игрок: {name}")
-    except:
-        pass  # Игрок уже существует
+        # Проверяем, есть ли уже
+        existing = supabase.table("players").select("*").eq("user_id", user_id).execute()
+        if not existing.data:
+            supabase.table("players").insert({"user_id": user_id, "name": name}).execute()
+            print(f"✅ Добавлен игрок: {name}")
+            return True
+        else:
+            print(f"♻️ Игрок уже есть: {name}")
+            return True
+    except Exception as e:
+        print(f"❌ Ошибка добавления: {e}")
+        return False
 
 # ================== СТАРТ ==================
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    add_player(message.from_user.id, message.from_user.first_name)
+    user_id = message.from_user.id
+    name = message.from_user.first_name
+    
+    # Добавляем игрока в БД
+    add_player(user_id, name)
     
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -36,7 +48,8 @@ async def cmd_start(message: types.Message):
         ]
     )
     await message.answer(
-        "🕯️ **ПИСЬМА ПРИЗРАКА**\n\nНажми кнопку, чтобы взять улику.",
+        "🕯️ **ПИСЬМА ПРИЗРАКА**\n\n"
+        f"Привет, {name}! Нажми кнопку, чтобы взять улику.",
         reply_markup=keyboard
     )
 
@@ -44,8 +57,12 @@ async def cmd_start(message: types.Message):
 @dp.callback_query(F.data == "take_card")
 async def take_card(callback: types.CallbackQuery):
     user_id = callback.from_user.id
-    add_player(user_id, callback.from_user.first_name)
+    name = callback.from_user.first_name
     
+    # Убеждаемся, что игрок в БД
+    add_player(user_id, name)
+    
+    # Получаем карту
     all_cards = supabase.table("cards").select("*").execute()
     available = [c for c in all_cards.data if c['id'] not in used_cards]
     
@@ -55,13 +72,17 @@ async def take_card(callback: types.CallbackQuery):
     
     card = random.choice(available)
     used_cards.append(card['id'])
+    
+    # Сохраняем временно
     user_data[user_id] = {'card_id': card['id'], 'card_url': card['image_url']}
     
+    # Отправляем картинку
     await callback.message.answer_photo(
         photo=card['image_url'],
         caption="🃏 **Улика получена!**\n\nВыбери категорию:"
     )
     
+    # Кнопки категорий
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -81,11 +102,11 @@ async def select_category(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     
     if user_id not in user_data:
-        await callback.message.answer("❌ Сначала возьми улику.")
+        await callback.message.answer("❌ Сначала возьми улику (нажми «Взять улику»).")
         return
     
     user_data[user_id]['category'] = category
-    await callback.message.answer(f"✅ Категория: {category}\n\n✍️ Напиши историю:")
+    await callback.message.answer(f"✅ Категория: {category}\n\n✍️ Напиши историю для этой улики (одним сообщением):")
     await callback.answer()
 
 # ================== ПОЛУЧЕНИЕ ИСТОРИИ ==================
@@ -93,6 +114,7 @@ async def select_category(callback: types.CallbackQuery):
 async def get_story(message: types.Message):
     user_id = message.from_user.id
     
+    # Проверяем, есть ли незавершённый ход
     if user_id not in user_data or 'category' not in user_data[user_id]:
         return
     
@@ -101,26 +123,30 @@ async def get_story(message: types.Message):
     category = user_data[user_id]['category']
     card_url = user_data[user_id]['card_url']
     
-    supabase.table("moves").insert({
-        "player_id": user_id,
-        "card_id": card_id,
-        "category": category,
-        "story": story
-    }).execute()
+    # Сохраняем ход в БД
+    try:
+        supabase.table("moves").insert({
+            "player_id": user_id,
+            "card_id": card_id,
+            "category": category,
+            "story": story
+        }).execute()
+        await message.answer(
+            f"📜 **История сохранена!**\n\n"
+            f"🃏 Улика: [посмотреть]({card_url})\n"
+            f"📂 Категория: {category}\n"
+            f"📝 История: {story}\n\n"
+            f"👻 Следующий игрок, нажми «Взять улику»."
+        )
+    except Exception as e:
+        await message.answer(f"❌ Ошибка сохранения: {e}")
     
-    await message.answer(
-        f"📜 **История сохранена!**\n\n"
-        f"🃏 [Улика]({card_url})\n"
-        f"📂 {category}\n"
-        f"📝 {story}\n\n"
-        f"👻 Следующий игрок, нажми «Взять улику»."
-    )
-    
+    # Очищаем временные данные
     del user_data[user_id]
 
 # ================== ЗАПУСК ==================
 async def main():
-    print("✅ Бот запущен!")
+    print("✅ Бот Письма Призрака запущен!")
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
