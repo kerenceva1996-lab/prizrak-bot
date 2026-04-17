@@ -17,18 +17,18 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 used_cards = []
 user_data = {}
 
-# ================== ДОБАВЛЕНИЕ ИГРОКА В БД ==================
-async def ensure_player(user_id, name):
-    """Проверяет, есть ли игрок в БД, и добавляет если нет"""
-    existing = supabase.table("players").select("*").eq("user_id", user_id).execute()
-    if not existing.data:
+# ================== ДОБАВЛЕНИЕ ИГРОКА ==================
+def add_player(user_id, name):
+    try:
         supabase.table("players").insert({"user_id": user_id, "name": name}).execute()
-        print(f"✅ Добавлен игрок: {name} ({user_id})")
+        print(f"✅ Добавлен игрок: {name}")
+    except:
+        pass  # Игрок уже существует
 
-# ================== КОМАНДА /start ==================
+# ================== СТАРТ ==================
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    await ensure_player(message.from_user.id, message.from_user.first_name)
+    add_player(message.from_user.id, message.from_user.first_name)
     
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -36,8 +36,7 @@ async def cmd_start(message: types.Message):
         ]
     )
     await message.answer(
-        "🕯️ **ПИСЬМА ПРИЗРАКА**\n\n"
-        "Нажми кнопку, чтобы взять улику и начать игру.",
+        "🕯️ **ПИСЬМА ПРИЗРАКА**\n\nНажми кнопку, чтобы взять улику.",
         reply_markup=keyboard
     )
 
@@ -45,23 +44,22 @@ async def cmd_start(message: types.Message):
 @dp.callback_query(F.data == "take_card")
 async def take_card(callback: types.CallbackQuery):
     user_id = callback.from_user.id
-    await ensure_player(user_id, callback.from_user.first_name)
+    add_player(user_id, callback.from_user.first_name)
     
     all_cards = supabase.table("cards").select("*").execute()
     available = [c for c in all_cards.data if c['id'] not in used_cards]
     
     if not available:
-        await callback.message.answer("❌ Все улики уже использованы! Игра окончена.")
+        await callback.message.answer("❌ Все улики использованы!")
         return
     
     card = random.choice(available)
     used_cards.append(card['id'])
-    
     user_data[user_id] = {'card_id': card['id'], 'card_url': card['image_url']}
     
     await callback.message.answer_photo(
         photo=card['image_url'],
-        caption=f"🃏 **Улика получена!**\n\nВыбери категорию:"
+        caption="🃏 **Улика получена!**\n\nВыбери категорию:"
     )
     
     keyboard = InlineKeyboardMarkup(
@@ -73,7 +71,7 @@ async def take_card(callback: types.CallbackQuery):
             ]
         ]
     )
-    await callback.message.answer("Куда положим эту улику?", reply_markup=keyboard)
+    await callback.message.answer("Куда положим улику?", reply_markup=keyboard)
     await callback.answer()
 
 # ================== ВЫБОР КАТЕГОРИИ ==================
@@ -83,12 +81,11 @@ async def select_category(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     
     if user_id not in user_data:
-        await callback.message.answer("❌ Сначала возьми улику (нажми «Взять улику»).")
+        await callback.message.answer("❌ Сначала возьми улику.")
         return
     
     user_data[user_id]['category'] = category
-    
-    await callback.message.answer(f"✅ Категория выбрана: **{category}**\n\n✍️ Напиши историю для этой улики (одним сообщением):")
+    await callback.message.answer(f"✅ Категория: {category}\n\n✍️ Напиши историю:")
     await callback.answer()
 
 # ================== ПОЛУЧЕНИЕ ИСТОРИИ ==================
@@ -104,7 +101,6 @@ async def get_story(message: types.Message):
     category = user_data[user_id]['category']
     card_url = user_data[user_id]['card_url']
     
-    # Сохраняем в Supabase
     supabase.table("moves").insert({
         "player_id": user_id,
         "card_id": card_id,
@@ -114,9 +110,9 @@ async def get_story(message: types.Message):
     
     await message.answer(
         f"📜 **История сохранена!**\n\n"
-        f"🃏 Улика: [посмотреть]({card_url})\n"
-        f"📂 Категория: {category}\n"
-        f"📝 История: {story}\n\n"
+        f"🃏 [Улика]({card_url})\n"
+        f"📂 {category}\n"
+        f"📝 {story}\n\n"
         f"👻 Следующий игрок, нажми «Взять улику»."
     )
     
@@ -124,7 +120,7 @@ async def get_story(message: types.Message):
 
 # ================== ЗАПУСК ==================
 async def main():
-    print("✅ Бот Письма Призрака запущен!")
+    print("✅ Бот запущен!")
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
