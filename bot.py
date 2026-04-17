@@ -29,7 +29,7 @@ async def cmd_start(message: types.Message):
     )
     await message.answer("🕯️ Нажми кнопку, чтобы начать игру.", reply_markup=keyboard)
 
-# ================== КНОПКА "СЕСТЬ ЗА СТОЛ" (открывает сайт с кнопкой) ==================
+# ================== КНОПКА "СЕСТЬ ЗА СТОЛ" ==================
 @dp.callback_query(F.data == "to_table")
 async def to_table(callback: types.CallbackQuery):
     url = "https://kerenceva1996-lab.github.io/ghost-table/"
@@ -62,17 +62,14 @@ async def handle_web_app_data(message: types.Message):
         card = random.choice(available)
         used_cards.append(card['id'])
         
-        # Сохраняем выбранную карту для пользователя
         user_stories[message.from_user.id] = {'card_id': card['id'], 'card_url': card['image_url']}
         
-        # Отправляем картинку в чат
         await bot.send_photo(
             chat_id=message.chat.id,
             photo=card['image_url'],
             caption=f"🃏 Улика #{card['id']}\n\nВыбери категорию:"
         )
         
-        # Кнопки выбора категории
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
                 [
@@ -92,13 +89,18 @@ async def handle_web_app_data(message: types.Message):
 @dp.callback_query(F.data.startswith("cat_"))
 async def category_selected(callback: types.CallbackQuery):
     data = callback.data.split("_")
-    category = data[1]  # motiv, mesto, sposob
-    card_id = int(data[2])
+    cat_key = data[1]  # motiv, mesto, sposob
     
-    # Сохраняем категорию
+    category_map = {
+        'motiv': 'МОТИВ',
+        'mesto': 'МЕСТО',
+        'sposob': 'СПОСОБ'
+    }
+    category = category_map.get(cat_key, cat_key.upper())
+    
     user_stories[callback.from_user.id]['category'] = category
     
-    await callback.message.answer(f"✅ Категория выбрана: {category.upper()}\n\nНапиши историю для этой улики (текст):")
+    await callback.message.answer(f"✅ Категория выбрана: {category}\n\nНапиши историю для этой улики (текст):")
     await callback.answer()
 
 # ================== ПОЛУЧЕНИЕ ИСТОРИИ ==================
@@ -113,7 +115,6 @@ async def get_story(message: types.Message):
     category = user_stories[user_id]['category']
     card_url = user_stories[user_id]['card_url']
     
-    # Сохраняем в Supabase
     supabase.table("moves").insert({
         "player_id": user_id,
         "card_id": card_id,
@@ -121,16 +122,14 @@ async def get_story(message: types.Message):
         "story": story
     }).execute()
     
-    # Публикуем результат в чат
     await message.answer(
         f"📜 **История сохранена!**\n\n"
         f"🃏 Улика: [картинка]({card_url})\n"
-        f"📂 Категория: {category.upper()}\n"
+        f"📂 Категория: {category}\n"
         f"📝 История: {story}\n\n"
         f"👻 Теперь ход другого игрока. Нажмите «Взять улику»."
     )
     
-    # Очищаем временные данные
     del user_stories[user_id]
 
 # ================== ЗАПУСК ==================
