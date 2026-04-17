@@ -17,8 +17,9 @@ dp = Dispatcher()
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 used_cards = []
+user_stories = {}
 
-# ================== КОМАНДА /start С КНОПКОЙ ==================
+# ================== КОМАНДА /start ==================
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     keyboard = InlineKeyboardMarkup(
@@ -26,9 +27,9 @@ async def cmd_start(message: types.Message):
             [InlineKeyboardButton(text="💼 Сесть за стол", callback_data="to_table")]
         ]
     )
-    await message.answer("🕯️ Нажми кнопку, чтобы сесть за стол.", reply_markup=keyboard)
+    await message.answer("🕯️ Нажми кнопку, чтобы начать игру.", reply_markup=keyboard)
 
-# ================== КНОПКА "СЕСТЬ ЗА СТОЛ" ==================
+# ================== КНОПКА "СЕСТЬ ЗА СТОЛ" (открывает сайт с кнопкой) ==================
 @dp.callback_query(F.data == "to_table")
 async def to_table(callback: types.CallbackQuery):
     url = "https://kerenceva1996-lab.github.io/ghost-table/"
@@ -39,12 +40,12 @@ async def to_table(callback: types.CallbackQuery):
     )
     await bot.send_message(
         chat_id=callback.from_user.id,
-        text="🕯️ Нажми кнопку, чтобы открыть стол:",
+        text="🕯️ Нажми кнопку, чтобы взять улику:",
         reply_markup=keyboard
     )
-    await callback.answer("✅ Стол открыт!")
+    await callback.answer("✅ Игра началась!")
 
-# ================== ПОЛУЧЕНИЕ КАРТЫ С САЙТА ==================
+# ================== ПОЛУЧЕНИЕ ЗАПРОСА С САЙТА ==================
 @dp.message(F.content_type == 'web_app_data')
 async def handle_web_app_data(message: types.Message):
     global used_cards
@@ -55,15 +56,82 @@ async def handle_web_app_data(message: types.Message):
         all_cards = supabase.table("cards").select("*").execute()
         available = [c for c in all_cards.data if c['id'] not in used_cards]
         if not available:
-            await message.answer(json.dumps({"action": "error", "message": "Нет карт"}))
+            await message.answer("❌ Все улики уже использованы!")
             return
+        
         card = random.choice(available)
         used_cards.append(card['id'])
-        await message.answer(json.dumps({
-            "action": "card_received",
-            "card_id": card['id'],
-            "url": card['image_url']
-        }))
+        
+        # Сохраняем выбранную карту для пользователя
+        user_stories[message.from_user.id] = {'card_id': card['id'], 'card_url': card['image_url']}
+        
+        # Отправляем картинку в чат
+        await bot.send_photo(
+            chat_id=message.chat.id,
+            photo=card['image_url'],
+            caption=f"🃏 Улика #{card['id']}\n\nВыбери категорию:"
+        )
+        
+        # Кнопки выбора категории
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="🗡️ МОТИВ", callback_data=f"cat_motiv_{card['id']}"),
+                    InlineKeyboardButton(text="📍 МЕСТО", callback_data=f"cat_mesto_{card['id']}"),
+                    InlineKeyboardButton(text="⚰️ СПОСОБ", callback_data=f"cat_sposob_{card['id']}")
+                ]
+            ]
+        )
+        await bot.send_message(
+            chat_id=message.chat.id,
+            text="Куда положим эту улику?",
+            reply_markup=keyboard
+        )
+
+# ================== ВЫБОР КАТЕГОРИИ ==================
+@dp.callback_query(F.data.startswith("cat_"))
+async def category_selected(callback: types.CallbackQuery):
+    data = callback.data.split("_")
+    category = data[1]  # motiv, mesto, sposob
+    card_id = int(data[2])
+    
+    # Сохраняем категорию
+    user_stories[callback.from_user.id]['category'] = category
+    
+    await callback.message.answer(f"✅ Категория выбрана: {category.upper()}\n\nНапиши историю для этой улики (текст):")
+    await callback.answer()
+
+# ================== ПОЛУЧЕНИЕ ИСТОРИИ ==================
+@dp.message()
+async def get_story(message: types.Message):
+    user_id = message.from_user.id
+    if user_id not in user_stories or 'category' not in user_stories[user_id]:
+        return
+    
+    story = message.text
+    card_id = user_stories[user_id]['card_id']
+    category = user_stories[user_id]['category']
+    card_url = user_stories[user_id]['card_url']
+    
+    # Сохраняем в Supabase
+    supabase.table("moves").insert({
+        "player_id": user_id,
+        "card_id": card_id,
+        "category": category,
+        "story": story
+    }).execute()
+    
+    # Публикуем результат в чат
+    await message.answer(
+        f"📜 **История сохранена!**\n\n"
+        f"🃏 Улика: [картинка]({card_url})\n"
+        f"📂 Категория: {category.upper()}\n"
+        f"📝 История: {story}\n\n"
+        f"👻 Теперь ход другого игрока. Нажмите «Взять улику»."
+    )
+    
+    # Очищаем временные данные
+    del user_stories[user_id]
 
 # ================== ЗАПУСК ==================
 async def main():
