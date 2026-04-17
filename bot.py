@@ -1,3 +1,4 @@
+import asyncio
 import random
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
@@ -48,7 +49,6 @@ async def update_table():
     buttons_motiv = []
     for i in range(4):
         if i < len(game_board['МОТИВ']):
-            card = game_board['МОТИВ'][i]
             buttons_motiv.append(InlineKeyboardButton(text=f"🔍 {i+1}", callback_data=f"view_motiv_{i}"))
         else:
             buttons_motiv.append(InlineKeyboardButton(text=f"⬜ {i+1}", callback_data=f"empty"))
@@ -79,7 +79,6 @@ async def update_table():
     else:
         text += "👻 Нажми «Взять улику»"
     
-    # Создаём клавиатуру из кнопок
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             buttons_motiv,
@@ -204,7 +203,6 @@ async def get_story(message: types.Message):
     card_url = user_data[user_id]['card_url']
     player_name = user_data[user_id]['player_name']
     
-    # Сохраняем в БД
     supabase.table("moves").insert({
         "player_id": user_id,
         "card_id": card_id,
@@ -212,7 +210,6 @@ async def get_story(message: types.Message):
         "story": story
     }).execute()
     
-    # Добавляем в игровой стол
     game_board[category].append({
         'url': card_url,
         'story': story,
@@ -220,7 +217,6 @@ async def get_story(message: types.Message):
         'card_id': card_id
     })
     
-    # Обновляем стол
     await update_table()
     
     await message.answer(
@@ -228,11 +224,9 @@ async def get_story(message: types.Message):
         f"👻 Следующий игрок, нажми «Взять улику»."
     )
     
-    # Смена хода
     current_turn = None
     del user_data[user_id]
     
-    # Проверяем, заполнен ли стол
     total_cards = len(game_board['МОТИВ']) + len(game_board['МЕСТО']) + len(game_board['СПОСОБ'])
     if total_cards >= 12:
         await message.answer(
@@ -244,7 +238,7 @@ async def get_story(message: types.Message):
 @dp.callback_query(F.data.startswith("view_"))
 async def view_card(callback: types.CallbackQuery):
     data = callback.data.split("_")
-    category = data[1]  # motiv, mesto, sposob
+    category = data[1]
     index = int(data[2])
     
     if category == 'motiv':
@@ -287,7 +281,6 @@ async def final_table(message: types.Message):
     
     await message.answer(text)
     
-    # Отправляем все картинки
     for category in ['МОТИВ', 'МЕСТО', 'СПОСОБ']:
         for card in game_board[category]:
             await message.answer_photo(
